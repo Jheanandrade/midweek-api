@@ -3,3 +3,4 @@
 *.log
 *.zip
 tmp/
+.idea
