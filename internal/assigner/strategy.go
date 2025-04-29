@@ -14,10 +14,13 @@ const (
 	FUNC_CONSELHEIRO         = "Conselheiro Sala B"
 	FUNC_ORACAO              = "Oração"
 	FUNC_ORACAO_FINAL        = "OraçãoFinal"
-	FUNC_LEITOR_BIBLIA       = "Leitor - Leitura da Bíblia"
-	FUNC_DISCURSO_TESOUROS   = "Discursos - Tesouros da Palavra de Deus"
+	FUNC_LEITOR_BIBLIA_A     = "Leitor - Leitura da Bíblia - A"
+	FUNC_LEITOR_BIBLIA_B     = "Leitor - Leitura da Bíblia - B"
+	FUNC_DISCURSO_TESOUROS   = "Discurso - Tesouros da Palavra de Deus"
+	FUNC_JOIAS               = "Joías Espirituais - Tesouros da Palavra de Deus"
 	FUNC_DISCURSO_MINISTERIO = "Discursos -  Faça Seu Melhor no Ministério"
 	FUNC_DISCURSO_CRISTA     = "Discursos - Nossa Vida Cristã"
+	FUNC_ESTUDO_BIBLICO      = "Estudo Bíblico - Nossa Vida Cristã"
 	FUNC_LEITOR_ESTUDO       = "Leitor - Estudo Biblíco"
 	FUNC_TITULAR_A_HOMEM     = "Titular - A (Homem)"
 	FUNC_AJUDANTE_A_HOMEM    = "Ajudante - A (Homem)"
@@ -69,9 +72,18 @@ func assignFunction(function string, dest map[string]string, pool map[string][]D
 func assignTreasures(m parser.MeetingData, dest map[string]string, pool map[string][]Designated, used map[string]bool, f *excelize.File, date string, exclusive bool) {
 	for _, key := range getSortedKeys(m.TreasuresFromGodsWord) {
 		text := strings.ToLower(m.TreasuresFromGodsWord[key])
-		if strings.Contains(text, "leitura da bíblia") {
-			dest[key] = pickUniqueAndRotate(FUNC_LEITOR_BIBLIA, pool, f, date, used, exclusive)
-		} else {
+
+		switch {
+		case strings.Contains(text, "leitura da bíblia"):
+			assignedA := pickUniqueExcluding(FUNC_LEITOR_BIBLIA_A, pool, f, date, used, "", exclusive)
+			assignedB := pickUniqueExcluding(FUNC_LEITOR_BIBLIA_B, pool, f, date, used, assignedA, exclusive)
+			dest[key+".A"] = assignedA
+			dest[key+".B"] = assignedB
+
+		case strings.Contains(text, "joias espirituais"):
+			dest[key] = pickUniqueAndRotate(FUNC_JOIAS, pool, f, date, used, exclusive)
+
+		default:
 			dest[key] = pickUniqueAndRotate(FUNC_DISCURSO_TESOUROS, pool, f, date, used, exclusive)
 		}
 	}
@@ -85,11 +97,14 @@ func assignMinistry(meeting parser.MeetingData, dest map[string]string, pool map
 
 	discourseKeys := []string{}
 	nonDiscourseKeys := []string{}
+
 	for _, key := range keys {
 		text := strings.ToLower(meeting.ApplyYourselfToTheFieldMinistry[key])
-		if strings.Contains(text, "discurso") {
+		switch {
+		case strings.Contains(text, "discurso"):
 			discourseKeys = append(discourseKeys, key)
-		} else {
+
+		default:
 			nonDiscourseKeys = append(nonDiscourseKeys, key)
 		}
 	}
@@ -129,12 +144,16 @@ func assignMinistry(meeting parser.MeetingData, dest map[string]string, pool map
 func assignChristians(m parser.MeetingData, dest map[string]string, pool map[string][]Designated, used map[string]bool, f *excelize.File, date string, exclusive bool) {
 	for _, key := range getSortedKeys(m.LivingAsChristians) {
 		text := strings.ToLower(m.LivingAsChristians[key])
-		if strings.Contains(text, "estudo bíblico de congregação") {
-			leader := pickUniqueAndRotate(FUNC_DISCURSO_CRISTA, pool, f, date, used, exclusive)
+
+		switch {
+		case strings.Contains(text, "estudo bíblico de congregação"):
+			leader := pickUniqueAndRotate(FUNC_ESTUDO_BIBLICO, pool, f, date, used, exclusive)
 			reader := pickUniqueExcluding(FUNC_LEITOR_ESTUDO, pool, f, date, used, leader, exclusive)
 			dest[key] = fmt.Sprintf("%s/%s", leader, reader)
-		} else {
+
+		default:
 			dest[key] = pickUniqueAndRotate(FUNC_DISCURSO_CRISTA, pool, f, date, used, exclusive)
+
 		}
 	}
 }
@@ -178,40 +197,51 @@ func getSortedKeys(m map[string]string) []string {
 }
 
 func updateDesignationDate(f *excelize.File, role string, name string, meetingDate string) error {
-	rows, err := f.GetRows("Sheet1")
+	rows, err := f.GetRows(sheetName)
 	if err != nil {
 		return err
 	}
 
 	headers := rows[0]
+	publicadoresIdx := -1
 	roleColIdx := -1
+
 	for i, h := range headers {
-		if strings.TrimSpace(h) == role {
+		h = strings.TrimSpace(h)
+		if strings.EqualFold(h, "Publicadores") {
+			publicadoresIdx = i
+		}
+		if h == role {
 			roleColIdx = i
-			break
 		}
 	}
+	if publicadoresIdx == -1 {
+		return fmt.Errorf("'Publishers' column not found")
+	}
 	if roleColIdx == -1 || roleColIdx+1 >= len(headers) {
-		return fmt.Errorf("coluna para %s não encontrada", role)
+		return fmt.Errorf("column for %s not found", role)
 	}
 
 	date := extractLastDateFromMeeting(meetingDate)
 	if date == "" {
-		return fmt.Errorf("data inválida para reunião: %s", meetingDate)
+		return fmt.Errorf("invalid date for meeting: %s", meetingDate)
 	}
 
 	for i, row := range rows {
 		if i == 0 || len(row) == 0 {
 			continue
 		}
-		if strings.TrimSpace(row[0]) == name {
+		if publicadoresIdx >= len(row) {
+			continue
+		}
+		if strings.TrimSpace(row[publicadoresIdx]) == name {
 			colName, _ := excelize.ColumnNumberToName(roleColIdx + 2)
 			cell := fmt.Sprintf("%s%d", colName, i+1)
-			return f.SetCellValue("Sheet1", cell, date)
+			return f.SetCellValue(sheetName, cell, date)
 		}
 	}
 
-	return fmt.Errorf("designado %s não encontrado", name)
+	return fmt.Errorf("designated %s not found", name)
 }
 
 func extractLastDateFromMeeting(meeting string) string {

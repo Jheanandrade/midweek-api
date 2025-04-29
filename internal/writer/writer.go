@@ -134,6 +134,8 @@ func writeSection(f *excelize.File, sheet string, row int, name string, items ma
 		text := items[k]
 		setStyledCell(f, sheet, row, "A", text, s["content"], false, false)
 
+		lowerText := strings.ToLower(text)
+
 		if name == sectionMinistry {
 			valA := getDesignated(m, k+".A")
 			valB := getDesignated(m, k+".B")
@@ -143,14 +145,26 @@ func writeSection(f *excelize.File, sheet string, row int, name string, items ma
 			if valB != "" {
 				setStyledCell(f, sheet, row, "B", valB, s["small"], false, false)
 			}
+		} else if name == sectionTreasures && strings.Contains(lowerText, "leitura da bíblia") {
+			// Caso especial: Leitura da Bíblia → dois leitores
+			valA := getDesignated(m, k+".A")
+			valB := getDesignated(m, k+".B")
+			if valA != "" {
+				setStyledCell(f, sheet, row, "C", valA, s["small"], false, false)
+			}
+			if valB != "" {
+				setStyledCell(f, sheet, row, "B", valB, s["small"], false, false)
+			}
 		} else {
-			if strings.Contains(strings.ToLower(text), "estudo bíblico de congregação") {
+			// Caso padrão
+			if strings.Contains(lowerText, "estudo bíblico de congregação") {
 				setStyledCell(f, sheet, row, "B", "Dirigente/Leitor", s["small"], false, false)
 			}
 			if d := getDesignated(m, k); d != "" {
 				setStyledCell(f, sheet, row, "C", d, s["small"], false, false)
 			}
 		}
+
 		row++
 	}
 	return row + 1
@@ -197,6 +211,84 @@ func getDesignated(m parser.MeetingData, key string) string {
 }
 
 func getSortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func GenerateDesignationsDoc(meetings []parser.MeetingData, period string) ([]byte, error) {
+	var builder strings.Builder
+
+	for _, meeting := range meetings {
+		date := meeting.MeetingDate
+
+		keysTreasures := getSortedKeysDoc(meeting.TreasuresFromGodsWord)
+		for _, key := range keysTreasures {
+			partText := strings.ToLower(meeting.TreasuresFromGodsWord[key])
+
+			if strings.Contains(partText, "leitura da bíblia") {
+				designationA := meeting.Designated[key+".A"]
+				if designationA != "" {
+					builder.WriteString(buildDesignationBlock(designationA, date, key, "Salão principal"))
+				}
+				designationB := meeting.Designated[key+".B"]
+				if designationB != "" {
+					builder.WriteString(buildDesignationBlock(designationB, date, key, "Sala B"))
+				}
+			}
+		}
+
+		keysMinistry := getSortedKeys(meeting.ApplyYourselfToTheFieldMinistry)
+		for _, key := range keysMinistry {
+			designationA := meeting.Designated[key+".A"]
+			if designationA != "" {
+				builder.WriteString(buildDesignationBlock(designationA, date, key, "Salão principal"))
+			}
+			designationB := meeting.Designated[key+".B"]
+			if designationB != "" {
+				builder.WriteString(buildDesignationBlock(designationB, date, key, "Sala B"))
+			}
+		}
+	}
+
+	return []byte(builder.String()), nil
+}
+
+func buildDesignationBlock(designation, date string, partNumber string, location string) string {
+	studentName := designation
+	helperName := ""
+	if strings.Contains(designation, "/") {
+		parts := strings.SplitN(designation, "/", 2)
+		studentName = strings.TrimSpace(parts[0])
+		helperName = strings.TrimSpace(parts[1])
+	}
+
+	var sb strings.Builder
+	sb.WriteString("DESIGNAÇÃO PARA A REUNIÃO\n")
+	sb.WriteString("NOSSA VIDA E MINISTÉRIO CRISTÃO\n\n")
+	sb.WriteString(fmt.Sprintf("Nome: %s\n", studentName))
+	if helperName != "" {
+		sb.WriteString(fmt.Sprintf("Ajudante: %s\n", helperName))
+	}
+	sb.WriteString(fmt.Sprintf("Data: %s\n", date))
+	sb.WriteString(fmt.Sprintf("Número da parte: %s\n", partNumber))
+	sb.WriteString(fmt.Sprintf("Local: %s\n", location))
+	sb.WriteString("\n")
+	sb.WriteString("Observação para o estudante: A lição e a fonte\n")
+	sb.WriteString("de matéria para a sua designação estão na Apostila\n")
+	sb.WriteString("da Reunião Vida e Ministério. Veja as instruções para a\n")
+	sb.WriteString("parte que estão nas Instruções para a Reunião Nossa\n")
+	sb.WriteString("Vida e Ministério Cristão (S-38).\n")
+	sb.WriteString("S-89-T 11/23\n")
+	sb.WriteString("\n\n")
+
+	return sb.String()
+}
+
+func getSortedKeysDoc(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

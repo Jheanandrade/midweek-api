@@ -16,41 +16,9 @@ import (
 
 const (
 	rtfExtension          = ".rtf"
-	txtExtension          = ".txt"
 	libreOfficeEnvVar     = "LIBREOFFICE_PATH"
 	defaultLibreOfficeCmd = "libreoffice"
 )
-
-func SearchZipFileByKeyword(directory, keyword string) (string, error) {
-	var foundPath string
-
-	err := filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if info == nil || info.IsDir() {
-			return nil
-		}
-
-		if isMatchingZipFile(path, keyword) {
-			foundPath = path
-		}
-		return nil
-	})
-
-	if err != nil {
-		return "", fmt.Errorf("error while traversing directory: %w", err)
-	}
-
-	return foundPath, nil
-}
-
-func isMatchingZipFile(path, keyword string) bool {
-	pathLower := strings.ToLower(path)
-	keywordLower := strings.ToLower(keyword)
-	return strings.HasSuffix(pathLower, ".zip") && strings.Contains(pathLower, keywordLower)
-}
 
 func UnzipRTFFiles(pathUnzipped, tmp string) ([]string, error) {
 	var rtfPaths []string
@@ -89,52 +57,11 @@ func NormalizeLine(line string) string {
 	return strings.ReplaceAll(line, "\u00A0", " ")
 }
 
-func ConvertRTFToTxtInMemory(rtfPaths []string) ([]string, error) {
-	var txtContents []string
-	libreOfficeCmd := getLibreOfficeCommand()
-
-	for _, path := range rtfPaths {
-		outputPath := buildOutputPath(path)
-
-		if err := runLibreOfficeConversion(libreOfficeCmd, path, outputPath); err != nil {
-			return nil, err
-		}
-
-		content, err := readAndDecodeFile(outputPath)
-		if err != nil {
-			return nil, err
-		}
-
-		txtContents = append(txtContents, content)
-
-		_ = os.Remove(outputPath)
-	}
-
-	return txtContents, nil
-}
-
 func getLibreOfficeCommand() string {
 	if cmd := os.Getenv(libreOfficeEnvVar); cmd != "" {
 		return cmd
 	}
 	return defaultLibreOfficeCmd
-}
-
-func buildOutputPath(inputPath string) string {
-	baseName := filepath.Base(inputPath[:len(inputPath)-len(filepath.Ext(inputPath))]) + txtExtension
-	return filepath.Join(os.TempDir(), baseName)
-}
-
-func runLibreOfficeConversion(cmdPath, inputPath, outputPath string) error {
-	cmd := exec.Command(cmdPath, "--headless", "--convert-to", "txt:Text", "--outdir", os.TempDir(), inputPath)
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to convert %s using libreoffice: %v\n%s", inputPath, err, stderr.String())
-	}
-	return nil
 }
 
 func readAndDecodeFile(filePath string) (string, error) {
@@ -168,4 +95,46 @@ func detectEncoding(data []byte) (string, error) {
 		return "", fmt.Errorf("failed to detect encoding: %w", err)
 	}
 	return result.Charset, nil
+}
+
+func ConvertSingleRTFToTXT(inputPath, outputPath string) error {
+	libreOfficeCmd := getLibreOfficeCommand()
+
+	cmd := exec.Command(libreOfficeCmd, "--headless", "--convert-to", "txt:Text", "--outdir", filepath.Dir(outputPath), inputPath)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to convert %s using libreoffice: %v\n%s", inputPath, err, stderr.String())
+	}
+	return nil
+}
+
+func ListTxtFilesForPeriod(period string) ([]string, error) {
+	dir := filepath.Join("data/unzipped", period)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read txt directory: %w", err)
+	}
+
+	var txtPaths []string
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".txt" {
+			txtPaths = append(txtPaths, filepath.Join(dir, entry.Name()))
+		}
+	}
+	return txtPaths, nil
+}
+
+func ReadTxtFiles(txtPaths []string) ([]string, error) {
+	var contents []string
+	for _, path := range txtPaths {
+		content, err := readAndDecodeFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read txt file %s: %w", path, err)
+		}
+		contents = append(contents, content)
+	}
+	return contents, nil
 }

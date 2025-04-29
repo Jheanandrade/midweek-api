@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"midweek-project/internal/assigner"
@@ -14,6 +13,7 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -39,36 +39,55 @@ func ListZipFiles(ctx context.Context) ([]string, error) {
 	return files, nil
 }
 
-func DeleteZipFile(ctx context.Context, filename string) error {
+func DeleteZipFile(filename string) error {
 	path := filepath.Join(zipInputPath, filename)
 	return os.Remove(path)
 }
 
-func StoreZipFile(ctx context.Context, file multipart.File, filename string) error {
-	if err := os.MkdirAll(zipInputPath, os.ModePerm); err != nil {
-		return err
-	}
+func StoreZipFile(file multipart.File, filename string) error {
+	period := strings.TrimSuffix(filename, filepath.Ext(filename))
 
-	destPath := filepath.Join(zipInputPath, filename)
-	destFile, err := os.Create(destPath)
+	tempZipPath := filepath.Join(os.TempDir(), filename)
+
+	out, err := os.Create(tempZipPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create temp zip file: %w", err)
 	}
 
-	defer func(destFile *os.File) {
-		_ = destFile.Close()
-	}(destFile)
+	defer func(out *os.File) {
+		_ = out.Close()
+	}(out)
 
-	_, err = io.Copy(destFile, file)
-	return err
+	if _, err := io.Copy(out, file); err != nil {
+		return fmt.Errorf("failed to copy zip contents: %w", err)
+	}
+
+	destDir := filepath.Join(zipInputPath, period)
+	if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create dest dir: %w", err)
+	}
+
+	rtfPaths, err := util.UnzipRTFFiles(tempZipPath, destDir)
+	if err != nil {
+		return fmt.Errorf("failed to unzip: %w", err)
+	}
+
+	for _, rtfPath := range rtfPaths {
+		outputPath := strings.TrimSuffix(rtfPath, filepath.Ext(rtfPath)) + ".txt"
+
+		if err := util.ConvertSingleRTFToTXT(rtfPath, outputPath); err != nil {
+			return fmt.Errorf("failed to convert rtf to txt: %w", err)
+		}
+
+		_ = os.Remove(rtfPath)
+	}
+
+	_ = os.Remove(tempZipPath)
+
+	return nil
 }
 
 func ProcessSchedule(designates io.Reader, period string) ([]byte, error) {
-	zipFilePath, err := util.SearchZipFileByKeyword(zipInputPath, period)
-	if err != nil {
-		return nil, errors.New("no zip file found")
-	}
-
 	var buf bytes.Buffer
 	if _, err := io.Copy(&buf, designates); err != nil {
 		return nil, err
@@ -84,12 +103,12 @@ func ProcessSchedule(designates io.Reader, period string) ([]byte, error) {
 		return nil, err
 	}
 
-	rtfPaths, err := util.UnzipRTFFiles(zipFilePath, zipInputPath)
+	txtPaths, err := util.ListTxtFilesForPeriod(period)
 	if err != nil {
 		return nil, err
 	}
 
-	txtContents, err := util.ConvertRTFToTxtInMemory(rtfPaths)
+	txtContents, err := util.ReadTxtFiles(txtPaths)
 	if err != nil {
 		return nil, err
 	}
@@ -100,6 +119,11 @@ func ProcessSchedule(designates io.Reader, period string) ([]byte, error) {
 	}
 
 	meetingsWithDesignates, err := assigner.AssignToMeetings(meetings, designatesPool, excelFile)
+	if err != nil {
+		return nil, err
+	}
+
+	docContent, err := writer.GenerateDesignationsDoc(meetingsWithDesignates, period)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +143,7 @@ func ProcessSchedule(designates io.Reader, period string) ([]byte, error) {
 
 	writeToZip(zipWriter, fmt.Sprintf("%s.xlsx", period), midweekBuffer.Bytes())
 	writeToZip(zipWriter, "designates.xlsx", designatesBuffer.Bytes())
+	writeToZip(zipWriter, fmt.Sprintf("%s.docx", period), docContent)
 
 	if err := zipWriter.Close(); err != nil {
 		return nil, err

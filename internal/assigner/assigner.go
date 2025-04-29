@@ -3,6 +3,7 @@ package assigner
 import (
 	"fmt"
 	"github.com/xuri/excelize/v2"
+	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ func LoadAvailableDesignatesFromFile(f *excelize.File) (map[string][]Designated,
 	designates := parseDesignatedRows(f, rows[1:], headers)
 
 	for function, list := range designates {
+		shuffleDesignated(list)
 		sort.SliceStable(list, func(i, j int) bool {
 			return compareByDatePriority(list[i], list[j])
 		})
@@ -42,13 +44,33 @@ func LoadAvailableDesignatesFromFile(f *excelize.File) (map[string][]Designated,
 func parseDesignatedRows(f *excelize.File, dataRows [][]string, headers []string) map[string][]Designated {
 	result := make(map[string][]Designated)
 
+	publicadorIdx := -1
+	firstFunctionIdx := -1
+	for idx, header := range headers {
+		h := strings.TrimSpace(header)
+		if strings.EqualFold(h, "Publicadores") {
+			publicadorIdx = idx
+		} else if publicadorIdx != -1 && h != "" && firstFunctionIdx == -1 {
+			firstFunctionIdx = idx
+		}
+	}
+	if publicadorIdx == -1 {
+		panic("'Publishers' column not found")
+	}
+	if firstFunctionIdx == -1 {
+		panic("No functions found after 'Publishers'")
+	}
+
 	for rowIdx, row := range dataRows {
 		if len(row) == 0 {
 			continue
 		}
-		name := row[0]
+		if publicadorIdx >= len(row) {
+			continue
+		}
+		name := row[publicadorIdx]
 
-		for colIdx := 1; colIdx < len(headers)-1; colIdx += 2 {
+		for colIdx := firstFunctionIdx; colIdx < len(headers)-1; colIdx += 2 {
 			function := strings.TrimSpace(headers[colIdx])
 			aptCell := cellPosition(colIdx+1, rowIdx+2)
 			dateCell := cellPosition(colIdx+2, rowIdx+2)
@@ -68,9 +90,7 @@ func parseDesignatedRows(f *excelize.File, dataRows [][]string, headers []string
 	return result
 }
 
-// ✅ Ordena por: vazios > datas antigas > datas inválidas
 func compareByDatePriority(a, b Designated) bool {
-	// Prioridade 1: sem data
 	if a.LastDesignation == "" && b.LastDesignation != "" {
 		return true
 	}
@@ -78,10 +98,9 @@ func compareByDatePriority(a, b Designated) bool {
 		return false
 	}
 	if a.LastDesignation == "" && b.LastDesignation == "" {
-		return a.Name < b.Name // desempatador por nome
+		return false
 	}
 
-	// Ambas têm data — compara
 	dateA, errA := time.Parse("02/01/2006", a.LastDesignation)
 	dateB, errB := time.Parse("02/01/2006", b.LastDesignation)
 
@@ -96,6 +115,13 @@ func compareByDatePriority(a, b Designated) bool {
 	}
 
 	return dateA.Before(dateB)
+}
+
+func shuffleDesignated(list []Designated) {
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(list), func(i, j int) {
+		list[i], list[j] = list[j], list[i]
+	})
 }
 
 func isDesignated(value string) bool {

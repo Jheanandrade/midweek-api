@@ -26,7 +26,7 @@ func DeleteZipFile(c echo.Context) error {
 		})
 	}
 
-	err := service.DeleteZipFile(c.Request().Context(), filename)
+	err := service.DeleteZipFile(filename)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": err.Error(),
@@ -88,7 +88,7 @@ func HandleUploadZip(c echo.Context) error {
 	}(file)
 
 	zipFilename := fileHeader.Filename
-	if err := service.StoreZipFile(c.Request().Context(), file, zipFilename); err != nil {
+	if err := service.StoreZipFile(file, zipFilename); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
